@@ -23,10 +23,21 @@ function toDate(iso?: string): string {
 function workMode(value?: string): string {
   const v = clean(value).toLowerCase();
   if (v === "remote" || v === "onsite" || v === "hybrid") return v;
-  if (v.includes("remote")) return "remote";
   if (v.includes("hybrid")) return "hybrid";
-  if (v.includes("onsite") || v.includes("on-site")) return "onsite";
-  return "remote";
+  if (v.includes("onsite") || v.includes("on-site") || v.includes("office")) {
+    return "onsite";
+  }
+  if (v.includes("remote") || v.includes("wfh") || v.includes("work from home")) {
+    return "remote";
+  }
+  // Prefer empty over forcing remote so filters stay honest
+  return v || "remote";
+}
+
+function postedAtIso(job: RawSmeJob): string {
+  const iso = job.createdAt || job.updatedAt || "";
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? "" : new Date(ms).toISOString();
 }
 
 function employmentType(value?: string): string {
@@ -177,6 +188,7 @@ export function mapCountryJob(
   const rateMin = job.rateMin ?? job.hourlyRateMin;
   const rateMax = job.rateMax ?? job.hourlyRateMax;
 
+  const postedAt = postedAtIso(job);
   return {
     external_id: `SME-${key}-${code}`,
     title,
@@ -185,6 +197,7 @@ export function mapCountryJob(
     work_mode: workMode(job.workLocation),
     location: locationText(job, country),
     posted_date: toDate(job.createdAt) || toDate(job.updatedAt),
+    posted_at: postedAt,
     company_name: "SME Careers by SuperAnnotate",
     employment_type: employmentType(job.employmentType),
     country,
@@ -256,6 +269,7 @@ export function collapseToPartnerJobs(raw: RawSmeJob[]): CsvJob[] {
       work_mode: workMode(india.workLocation),
       location: locationText(india, "India"),
       posted_date: toDate(india.createdAt) || toDate(india.updatedAt),
+      posted_at: postedAtIso(india),
       company_name: "SME Careers by SuperAnnotate",
       employment_type: employmentType(india.employmentType),
       country: "India",

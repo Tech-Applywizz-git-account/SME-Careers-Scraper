@@ -255,28 +255,8 @@ async function main() {
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, `sme-jobs-${day}.csv`);
   await writeFile(file, toCsv(jobs), "utf8");
-
-  // Also refresh public snapshot in partner shape
-  const pub = path.join(ROOT, "public", "data");
-  await mkdir(pub, { recursive: true });
-  await writeFile(path.join(pub, "jobs.csv"), toCsv(jobs), "utf8");
-  await writeFile(
-    path.join(pub, "jobs.json"),
-    JSON.stringify(
-      {
-        meta: {
-          scraped_at: new Date().toISOString(),
-          source_url: "https://sme.careers/jobs",
-          total: raw.length,
-          unique: jobs.length,
-        },
-        jobs,
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
+  // Do NOT write public/data here — that snapshot must keep ALL countries
+  // for the dashboard dropdown. Partner CSV stays under docs/partner-feeds only.
 
   console.log(`Wrote ${jobs.length} India-eligible jobs → ${file}`);
   const sample = jobs[0];

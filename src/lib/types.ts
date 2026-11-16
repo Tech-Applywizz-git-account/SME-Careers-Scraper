@@ -23,7 +23,10 @@ export const CSV_HEADERS = [
 
 export type CsvHeader = (typeof CSV_HEADERS)[number];
 
-export type CsvJob = Record<CsvHeader, string>;
+export type CsvJob = Record<CsvHeader, string> & {
+  /** ISO timestamp for client date filtering (not exported in CSV) */
+  posted_at?: string;
+};
 
 export type ScrapeFilters = {
   from: string;

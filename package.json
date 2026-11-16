@@ -9,7 +9,8 @@
     "lint": "eslint",
     "scrape": "node scripts/scrape.mjs",
     "scrape:install": "npx playwright install chromium",
-    "export:partner": "node scripts/export-partner-feed.mjs"
+    "export:partner": "node scripts/export-partner-feed.mjs",
+    "export:dashboard": "node scripts/export-dashboard-snapshot.mjs"
   },
   "dependencies": {
     "next": "15.5.29",

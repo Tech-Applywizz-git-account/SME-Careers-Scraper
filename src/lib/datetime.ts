@@ -7,8 +7,8 @@ export type ClockValue = {
   meridiem: Meridiem;
 };
 
-/** Hours for quick ranges (168 = 7 days) */
-export type QuickRangeHours = 1 | 6 | 12 | 24 | 48 | 72 | 168;
+/** Hours for quick ranges (168 = 7 days). Use 0 for all-time (no date bound). */
+export type QuickRangeHours = 0 | 1 | 6 | 12 | 24 | 48 | 72 | 168;
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -141,6 +141,7 @@ export const MINUTES = Array.from({ length: 60 }, (_, i) => pad2(i));
 
 export const QUICK_RANGES: { hours: QuickRangeHours | "custom"; label: string }[] =
   [
+    { hours: 0, label: "All time" },
     { hours: 1, label: "Last 1 hr" },
     { hours: 6, label: "Last 6 hrs" },
     { hours: 12, label: "Last 12 hrs" },
@@ -148,3 +149,22 @@ export const QUICK_RANGES: { hours: QuickRangeHours | "custom"; label: string }[
     { hours: 168, label: "Last 7 days" },
     { hours: "custom", label: "Custom" },
   ];
+
+/** True when job falls inside [fromIso, toIso]. Null bound = open. */
+export function jobInIsoRange(
+  job: { posted_at?: string; posted_date?: string },
+  fromIso: string | null,
+  toIso: string | null,
+): boolean {
+  if (fromIso === null && toIso === null) return true;
+  let t = NaN;
+  if (job.posted_at) t = Date.parse(job.posted_at);
+  if (Number.isNaN(t) && job.posted_date) {
+    // Day-only fallback (static snapshot): treat as local midnight
+    t = Date.parse(`${job.posted_date}T00:00:00`);
+  }
+  if (Number.isNaN(t)) return false;
+  if (fromIso !== null && t < Date.parse(fromIso)) return false;
+  if (toIso !== null && t > Date.parse(toIso)) return false;
+  return true;
+}

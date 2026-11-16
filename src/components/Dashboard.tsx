@@ -8,6 +8,7 @@ import {
   clockToIso,
   datetimeLocalToClock,
   formatClockRange,
+  jobInIsoRange,
   lastNHoursWindow,
   type ClockValue,
   type QuickRangeHours,
@@ -32,12 +33,20 @@ function applyLocalFilters(
     mode: string;
     employmentType: string;
     q: string;
+    fromIso: string | null;
+    toIso: string | null;
   },
 ): CsvJob[] {
   const needle = opts.q.trim().toLowerCase();
   return list.filter((job) => {
+    if (!jobInIsoRange(job, opts.fromIso, opts.toIso)) return false;
     if (opts.mode !== "all" && job.work_mode !== opts.mode) return false;
-    if (opts.country !== "all" && job.country !== opts.country) return false;
+    if (
+      opts.country !== "all" &&
+      job.country.toLowerCase() !== opts.country.toLowerCase()
+    ) {
+      return false;
+    }
     if (
       opts.employmentType !== "all" &&
       job.employment_type !== opts.employmentType
@@ -47,11 +56,13 @@ function applyLocalFilters(
     if (!needle) return true;
     return [
       job.title,
+      job.description,
       job.location,
       job.country,
       job.eligible_countries,
       job.skills,
       job.employment_type,
+      job.work_mode,
       job.external_id,
     ]
       .join(" ")
@@ -60,8 +71,16 @@ function applyLocalFilters(
   });
 }
 
+function safeClockToIso(clock: ClockValue): string | null {
+  try {
+    return clockToIso(clock);
+  } catch {
+    return null;
+  }
+}
+
 export default function Dashboard() {
-  const initial = lastNHoursWindow(12);
+  // Default: All time — full catalog until user narrows the window
   const [meta, setMeta] = useState<ScrapeMeta | null>(null);
   const [jobs, setJobs] = useState<CsvJob[]>([]);
   const [allCountries, setAllCountries] = useState<string[]>([]);
@@ -72,10 +91,17 @@ export default function Dashboard() {
   const [mode, setMode] = useState("all");
   const [country, setCountry] = useState("all");
   const [employmentType, setEmploymentType] = useState("all");
-  const [quickRange, setQuickRange] = useState<string>("12");
+  const [quickRange, setQuickRange] = useState<string>("0");
   const [moreOpen, setMoreOpen] = useState(false);
-  const [fromClock, setFromClock] = useState<ClockValue>(initial.from);
-  const [toClock, setToClock] = useState<ClockValue>(initial.to);
+  const [fromClock, setFromClock] = useState<ClockValue>(() => {
+    const w = lastNHoursWindow(24 * 365);
+    return w.from;
+  });
+  const [toClock, setToClock] = useState<ClockValue>(() => {
+    const w = lastNHoursWindow(24 * 365);
+    return w.to;
+  });
+  const allTime = quickRange === "0";
 
   useEffect(() => {
     let alive = true;
@@ -120,10 +146,11 @@ export default function Dashboard() {
   }, []);
 
   function applyQuickRange(hours: QuickRangeHours) {
+    setQuickRange(String(hours));
+    if (hours === 0) return;
     const w = lastNHoursWindow(hours);
     setFromClock(w.from);
     setToClock(w.to);
-    setQuickRange(String(hours));
   }
 
   function onFromLocalChange(value: string) {
@@ -142,17 +169,17 @@ export default function Dashboard() {
     }
   }
 
+  const fromIso = allTime ? null : safeClockToIso(fromClock);
+  const toIso = allTime ? null : safeClockToIso(toClock);
+
   async function runScrape() {
     setScraping(true);
     setError("");
     try {
-      const fromIso = clockToIso(fromClock);
-      const toIso = clockToIso(toClock);
-      // Date window from API with ALL countries so the country dropdown
-      // can filter live. Country / mode / employment / search apply after.
+      // Full catalog from API (no server date/country cuts). All UI filters —
+      // including date — apply on the client so changing range never empties
+      // the wrong subset.
       const params = new URLSearchParams({
-        from: fromIso,
-        to: toIso,
         country: "all",
         work_mode: "all",
         employment_type: "all",
@@ -191,15 +218,19 @@ export default function Dashboard() {
         );
       }
 
+      const nextFromIso = allTime ? null : safeClockToIso(fromClock);
+      const nextToIso = allTime ? null : safeClockToIso(toClock);
       const visible = applyLocalFilters(nextJobs, {
         country,
         mode,
         employmentType,
         q,
+        fromIso: nextFromIso,
+        toIso: nextToIso,
       });
       downloadCsv(
         visible,
-        `sme-jobs-${country === "all" ? "all" : country}-${fromClock.date}.csv`,
+        `sme-jobs-${country === "all" ? "all" : country}-${allTime ? "all-time" : fromClock.date}.csv`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scrape failed");
@@ -213,14 +244,29 @@ export default function Dashboard() {
     return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
   }, [allCountries, jobs]);
 
+  const inRange = useMemo(
+    () => jobs.filter((j) => jobInIsoRange(j, fromIso, toIso)),
+    [jobs, fromIso, toIso],
+  );
+
   const filtered = useMemo(
-    () => applyLocalFilters(jobs, { country, mode, employmentType, q }),
-    [jobs, q, mode, country, employmentType],
+    () =>
+      applyLocalFilters(jobs, {
+        country,
+        mode,
+        employmentType,
+        q,
+        fromIso,
+        toIso,
+      }),
+    [jobs, q, mode, country, employmentType, fromIso, toIso],
   );
 
   const remoteCount = filtered.filter((j) => j.work_mode === "remote").length;
+  const hybridCount = filtered.filter((j) => j.work_mode === "hybrid").length;
+  const onsiteCount = filtered.filter((j) => j.work_mode === "onsite").length;
   const moreActive = mode !== "all" || employmentType !== "all";
-  const rangeLabel = formatClockRange(fromClock, toClock);
+  const rangeLabel = allTime ? "All time" : formatClockRange(fromClock, toClock);
 
   return (
     <div className={styles.shell}>
@@ -246,6 +292,7 @@ export default function Dashboard() {
                 className={styles.control}
                 value={clockToDatetimeLocal(fromClock)}
                 onChange={(e) => onFromLocalChange(e.target.value)}
+                disabled={allTime}
               />
             </label>
 
@@ -256,6 +303,7 @@ export default function Dashboard() {
                 className={styles.control}
                 value={clockToDatetimeLocal(toClock)}
                 onChange={(e) => onToLocalChange(e.target.value)}
+                disabled={allTime}
               />
             </label>
 
@@ -369,11 +417,13 @@ export default function Dashboard() {
           </div>
           <div className={styles.stat}>
             <span className={styles.statLabel}>In range</span>
-            <span className={styles.statValue}>{jobs.length}</span>
+            <span className={styles.statValue}>{inRange.length}</span>
           </div>
           <div className={styles.stat}>
-            <span className={styles.statLabel}>Remote</span>
-            <span className={styles.statValue}>{remoteCount}</span>
+            <span className={styles.statLabel}>Modes</span>
+            <span className={styles.statValue}>
+              {remoteCount}r · {hybridCount}h · {onsiteCount}o
+            </span>
           </div>
           <div className={styles.stat}>
             <span className={styles.statLabel}>Countries</span>
@@ -393,12 +443,12 @@ export default function Dashboard() {
 
         <p className={styles.note}>
           {scraping
-            ? "Scraping live from API (all countries in date range)…"
+            ? "Scraping live from API…"
             : loading
               ? "Loading saved file…"
               : error
                 ? error
-                : `API scrape loaded ${jobs.length} rows in date range · showing ${filtered.length} after country/mode filters` +
+                : `Loaded ${jobs.length} rows · ${inRange.length} in date range · showing ${filtered.length}` +
                   (meta?.scraped_at
                     ? ` · ${new Date(meta.scraped_at).toLocaleString()}`
                     : "")}
@@ -407,7 +457,10 @@ export default function Dashboard() {
         <div className={styles.tableWrap}>
           {!loading && !scraping && filtered.length === 0 ? (
             <div className={styles.empty}>
-              No rows for these filters. Adjust range/country and scrape again.
+              No rows for these filters.
+              {jobs.length > 0
+                ? " Try All time, clear country/mode, or widen the date range — most SME postings are remote; hybrid/onsite are rare."
+                : " Run Scrape & download CSV to refresh from the live API."}
             </div>
           ) : (
             <table className={styles.table}>
@@ -458,10 +511,11 @@ export default function Dashboard() {
         </div>
 
         <p className={styles.foot}>
-          Data comes from the live <code>/api/scrape</code> API (not a static
-          CSV). Date range needs Scrape; country / mode / employment / search
-          update the table immediately. Partner India file:{" "}
-          <code>npm run export:partner</code>.
+          Country, work mode, employment, search, and date range update the
+          table immediately. Scrape refreshes from the live API and downloads
+          the filtered CSV. SME&apos;s open feed is almost entirely remote —
+          hybrid/onsite only appear when those rare postings exist. Partner
+          India file: <code>npm run export:partner</code>.
         </p>
       </div>
     </div>
