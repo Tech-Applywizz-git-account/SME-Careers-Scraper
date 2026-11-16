@@ -109,12 +109,12 @@ function buildDescription(job: RawSmeJob): string {
   return parts.join("\n\n");
 }
 
-function locationText(job: RawSmeJob): string {
+function locationText(job: RawSmeJob, country: string): string {
   const mode = workMode(job.workLocation);
   if (mode === "remote") return "Remote";
   const city = clean(job.city?.name);
   const state = clean(job.state?.name);
-  return [city, state, "India"].filter(Boolean).join(", ") || "Remote";
+  return [city, state, country].filter(Boolean).join(", ") || "Remote";
 }
 
 function applyUrl(externalKey: string, title: string): string {
@@ -124,36 +124,103 @@ function applyUrl(externalKey: string, title: string): string {
   return `${SITE}/jobs?${params.toString()}`;
 }
 
-function countryName(job: RawSmeJob): string {
+export function countryName(job: RawSmeJob): string {
   return clean(job.country?.name);
 }
 
-function countryCode(job: RawSmeJob): string {
+export function countryCodeOf(job: RawSmeJob): string {
   return clean(job.countryCode || job.country?.countryCode).toUpperCase();
 }
 
 export function isIndiaJob(job: RawSmeJob): boolean {
-  const name = countryName(job).toLowerCase();
-  const code = countryCode(job);
-  return name === "india" || code === "IN";
+  return countryName(job).toLowerCase() === "india" || countryCodeOf(job) === "IN";
 }
 
-function groupKey(job: RawSmeJob): string {
+function externalKeyOf(job: RawSmeJob): string {
   return clean(job.externalKey) || clean(job.jobPostingId);
 }
 
+/** Build eligible_countries map: externalKey → sorted country names */
+export function eligibleCountriesByKey(raw: RawSmeJob[]): Map<string, string[]> {
+  const map = new Map<string, Set<string>>();
+  for (const job of raw) {
+    const key = externalKeyOf(job);
+    const name = countryName(job);
+    if (!key || !name) continue;
+    const set = map.get(key) ?? new Set<string>();
+    set.add(name);
+    map.set(key, set);
+  }
+  const out = new Map<string, string[]>();
+  for (const [k, set] of map) {
+    out.set(k, [...set].sort((a, b) => a.localeCompare(b)));
+  }
+  return out;
+}
+
 /**
- * Partner feed rules:
- * - one row per externalKey
- * - only jobs where India is eligible
- * - country/pay from the India posting
- * - external_id = SME-<externalKey>
- * - eligible_countries = all countries for that key
+ * Dashboard / API row: one row per country posting.
+ * Stable id: SME-<externalKey>-<COUNTRY_CODE>
+ */
+export function mapCountryJob(
+  job: RawSmeJob,
+  eligibleCountries: string[],
+): CsvJob | null {
+  const key = externalKeyOf(job);
+  const title = clean(job.title);
+  const description = buildDescription(job);
+  const country = countryName(job) || "Unknown";
+  const code = countryCodeOf(job) || "XX";
+  if (!key || !title || !description) return null;
+
+  const exp = experienceYears(job.experienceLevel, job.requirements ?? []);
+  const rateMin = job.rateMin ?? job.hourlyRateMin;
+  const rateMax = job.rateMax ?? job.hourlyRateMax;
+
+  return {
+    external_id: `SME-${key}-${code}`,
+    title,
+    description,
+    apply_url: applyUrl(key, title),
+    work_mode: workMode(job.workLocation),
+    location: locationText(job, country),
+    posted_date: toDate(job.createdAt) || toDate(job.updatedAt),
+    company_name: "SME Careers by SuperAnnotate",
+    employment_type: employmentType(job.employmentType),
+    country,
+    salary_min: salaryNum(rateMin),
+    salary_max: salaryNum(rateMax),
+    salary_currency: clean(job.currencyCode) || "USD",
+    salary_period: salaryPeriod(job.payUnit),
+    skills: skillNames(job),
+    experience_min_years: exp.min,
+    experience_max_years: exp.max,
+    closing_date: "",
+    is_active: clean(job.status).toLowerCase() === "closed" ? "no" : "yes",
+    eligible_countries: eligibleCountries.join("; "),
+  };
+}
+
+/** Map full open catalog → country rows for dashboard/API */
+export function mapAllCountryJobs(raw: RawSmeJob[]): CsvJob[] {
+  const eligible = eligibleCountriesByKey(raw);
+  const out: CsvJob[] = [];
+  for (const job of raw) {
+    const key = externalKeyOf(job);
+    const row = mapCountryJob(job, eligible.get(key) ?? []);
+    if (row) out.push(row);
+  }
+  return uniqueJobs(out);
+}
+
+/**
+ * Partner feed: one India-eligible row per externalKey.
+ * external_id = SME-<externalKey> (stable, no UUID)
  */
 export function collapseToPartnerJobs(raw: RawSmeJob[]): CsvJob[] {
   const groups = new Map<string, RawSmeJob[]>();
   for (const job of raw) {
-    const key = groupKey(job);
+    const key = externalKeyOf(job);
     if (!key) continue;
     const list = groups.get(key) ?? [];
     list.push(job);
@@ -165,25 +232,17 @@ export function collapseToPartnerJobs(raw: RawSmeJob[]): CsvJob[] {
     const indiaRows = rows.filter(isIndiaJob);
     if (!indiaRows.length) continue;
 
-    // Prefer open India row with richest description
-    indiaRows.sort((a, b) => {
-      const da = clean(a.description).length;
-      const db = clean(b.description).length;
-      return db - da;
-    });
+    indiaRows.sort(
+      (a, b) => clean(b.description).length - clean(a.description).length,
+    );
     const india = indiaRows[0];
     const title = clean(india.title);
     const description = buildDescription(india);
     if (!title || !description) continue;
 
     const countries = [
-      ...new Set(
-        rows
-          .map((r) => countryName(r))
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b)),
-      ),
-    ];
+      ...new Set(rows.map((r) => countryName(r)).filter(Boolean)),
+    ].sort((a, b) => a.localeCompare(b));
 
     const exp = experienceYears(india.experienceLevel, india.requirements ?? []);
     const rateMin = india.rateMin ?? india.hourlyRateMin;
@@ -195,7 +254,7 @@ export function collapseToPartnerJobs(raw: RawSmeJob[]): CsvJob[] {
       description,
       apply_url: applyUrl(key, title),
       work_mode: workMode(india.workLocation),
-      location: locationText(india),
+      location: locationText(india, "India"),
       posted_date: toDate(india.createdAt) || toDate(india.updatedAt),
       company_name: "SME Careers by SuperAnnotate",
       employment_type: employmentType(india.employmentType),
@@ -213,15 +272,11 @@ export function collapseToPartnerJobs(raw: RawSmeJob[]): CsvJob[] {
     });
   }
 
-  return out.sort((a, b) =>
-    a.posted_date < b.posted_date ? 1 : a.posted_date > b.posted_date ? -1 : 0,
-  );
+  return uniqueJobs(out);
 }
 
-/** @deprecated use collapseToPartnerJobs for partner CSV */
 export function mapJob(job: RawSmeJob): CsvJob | null {
-  const collapsed = collapseToPartnerJobs([job]);
-  return collapsed[0] ?? null;
+  return mapCountryJob(job, countryName(job) ? [countryName(job)] : []);
 }
 
 export function uniqueJobs(jobs: CsvJob[]): CsvJob[] {

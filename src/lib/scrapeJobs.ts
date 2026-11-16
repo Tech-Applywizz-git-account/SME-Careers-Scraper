@@ -1,4 +1,4 @@
-import { collapseToPartnerJobs } from "./mapJob";
+import { countryName, mapAllCountryJobs } from "./mapJob";
 import type { CsvJob, JobsPayload, RawSmeJob, ScrapeFilters } from "./types";
 
 const OPEN_JOBS_URL =
@@ -27,18 +27,6 @@ function jobTimeMs(job: RawSmeJob): number {
   const iso = job.createdAt || job.updatedAt || "";
   const ms = Date.parse(iso);
   return Number.isNaN(ms) ? NaN : ms;
-}
-
-function isIndiaRaw(job: RawSmeJob): boolean {
-  const name = (job.country?.name || "").trim().toLowerCase();
-  const code = (
-    job.countryCode ||
-    job.country?.countryCode ||
-    ""
-  )
-    .trim()
-    .toUpperCase();
-  return name === "india" || code === "IN";
 }
 
 export async function scrapeJobs(opts: ScrapeOptions = {}): Promise<JobsPayload> {
@@ -73,36 +61,27 @@ export async function scrapeJobs(opts: ScrapeOptions = {}): Promise<JobsPayload>
   const payload = (await res.json()) as { data?: { jobs?: RawSmeJob[] } };
   const raw = payload.data?.jobs ?? [];
 
-  // Datetime filter uses the India posting's createdAt when present
-  let filteredRaw = raw;
-  if (fromMs !== null || toMs !== null) {
-    const okKeys = new Set<string>();
-    for (const job of raw) {
-      if (!isIndiaRaw(job)) continue;
-      const t = jobTimeMs(job);
-      if (Number.isNaN(t)) continue;
-      if (fromMs !== null && t < fromMs) continue;
-      if (toMs !== null && t > toMs) continue;
-      const key = (job.externalKey || job.jobPostingId || "").trim();
-      if (key) okKeys.add(key);
-    }
-    filteredRaw = raw.filter((j) =>
-      okKeys.has((j.externalKey || j.jobPostingId || "").trim()),
-    );
-  }
+  // Full country list for the dropdown (always all countries from feed)
+  const allCountries = [
+    ...new Set(raw.map((j) => countryName(j)).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b));
 
-  // Partner shape: 1 row / externalKey, India-only, India pay
-  let jobs: CsvJob[] = collapseToPartnerJobs(filteredRaw);
+  // Date filter on each posting's createdAt
+  const inDate = raw.filter((job) => {
+    if (fromMs === null && toMs === null) return true;
+    const t = jobTimeMs(job);
+    if (Number.isNaN(t)) return false;
+    if (fromMs !== null && t < fromMs) return false;
+    if (toMs !== null && t > toMs) return false;
+    return true;
+  });
+
+  let jobs: CsvJob[] = mapAllCountryJobs(inDate);
 
   const needle = q.toLowerCase();
   jobs = jobs
     .filter((job) => {
-      // Partner CSV is always India; allow dashboard filter to no-op or match
-      if (
-        country !== "all" &&
-        job.country.toLowerCase() !== country.toLowerCase() &&
-        !job.eligible_countries.toLowerCase().includes(country.toLowerCase())
-      ) {
+      if (country !== "all" && job.country.toLowerCase() !== country.toLowerCase()) {
         return false;
       }
       if (workMode !== "all" && job.work_mode !== workMode) return false;
@@ -126,14 +105,6 @@ export async function scrapeJobs(opts: ScrapeOptions = {}): Promise<JobsPayload>
     })
     .slice(0, 5000);
 
-  const countries = [
-    ...new Set(
-      jobs
-        .flatMap((j) => j.eligible_countries.split(";").map((s) => s.trim()))
-        .filter(Boolean),
-    ),
-  ].sort((a, b) => a.localeCompare(b));
-
   const filters: ScrapeFilters = {
     from,
     to,
@@ -150,7 +121,7 @@ export async function scrapeJobs(opts: ScrapeOptions = {}): Promise<JobsPayload>
       total: raw.length,
       unique: jobs.length,
       filters,
-      countries,
+      countries: allCountries,
     },
     jobs,
   };
