@@ -86,18 +86,26 @@ export default function Dashboard() {
         const data = await res.json();
         if (!alive) return;
         setMeta(data.meta ?? null);
-        setJobs(Array.isArray(data.jobs) ? data.jobs : []);
+        const loadedJobs: CsvJob[] = Array.isArray(data.jobs)
+          ? (data.jobs as CsvJob[])
+          : [];
+        setJobs(loadedJobs);
         const fromMeta = data.meta?.countries;
-        if (Array.isArray(fromMeta) && fromMeta.length) {
-          setAllCountries(fromMeta);
+        if (
+          Array.isArray(fromMeta) &&
+          fromMeta.length &&
+          fromMeta.every((c: unknown) => typeof c === "string")
+        ) {
+          setAllCountries(fromMeta as string[]);
         } else {
-          setAllCountries(
-            [
-              ...new Set(
-                (data.jobs ?? []).map((j: CsvJob) => j.country).filter(Boolean),
-              ),
-            ].sort((a: string, b: string) => a.localeCompare(b)),
-          );
+          const countries = [
+            ...new Set(
+              loadedJobs
+                .map((j) => j.country)
+                .filter((c): c is string => Boolean(c)),
+            ),
+          ].sort((a, b) => a.localeCompare(b));
+          setAllCountries(countries);
         }
       } catch (e) {
         if (!alive) return;
@@ -159,15 +167,26 @@ export default function Dashboard() {
         throw new Error(data.error || `Scrape failed (${res.status})`);
       }
 
-      const nextJobs: CsvJob[] = Array.isArray(data.jobs) ? data.jobs : [];
+      const nextJobs: CsvJob[] = Array.isArray(data.jobs)
+        ? (data.jobs as CsvJob[])
+        : [];
       setMeta(data.meta ?? null);
       setJobs(nextJobs);
-      if (Array.isArray(data.meta?.countries) && data.meta.countries.length) {
-        setAllCountries(data.meta.countries);
+      const scrapeCountries = data.meta?.countries;
+      if (
+        Array.isArray(scrapeCountries) &&
+        scrapeCountries.length &&
+        scrapeCountries.every((c: unknown) => typeof c === "string")
+      ) {
+        setAllCountries(scrapeCountries as string[]);
       } else {
         setAllCountries(
           [
-            ...new Set(nextJobs.map((j) => j.country).filter(Boolean)),
+            ...new Set(
+              nextJobs
+                .map((j) => j.country)
+                .filter((c): c is string => Boolean(c)),
+            ),
           ].sort((a, b) => a.localeCompare(b)),
         );
       }

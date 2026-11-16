@@ -111,7 +111,7 @@ export function datetimeLocalToClock(value: string): ClockValue | null {
   const m = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
   if (!m) return null;
   const [, date, hh, mm] = m;
-  let hour24 = Number(hh);
+  const hour24 = Number(hh);
   if (Number.isNaN(hour24) || hour24 < 0 || hour24 > 23) return null;
   const meridiem: Meridiem = hour24 >= 12 ? "PM" : "AM";
   let hour12 = hour24 % 12;
